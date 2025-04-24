@@ -186,7 +186,8 @@ export default function HomeScreen() {
         />
       )}
 
-      {/* Bottom Navigation */}
+      {/* Spacer to prevent content from being hidden under nav */}
+      <View style={{ height: 70 }} />
       <BottomNavigation
         onScanPress={handleScanPress}
         onDocumentsPress={handleDocumentsPress}
@@ -225,7 +226,6 @@ const styles = StyleSheet.create({
   listContent: {
     flexGrow: 1,
     paddingHorizontal: 16,
-    paddingBottom: 80, // Space for bottom navigation
   },
   documentItem: {
     flexDirection: "row",

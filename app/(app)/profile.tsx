@@ -19,8 +19,12 @@ import BottomNavigation from "@/components/BottomNavigation";
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { user, updateUser, logout, loading } = authStore();
-  const { clearDocuments } = documentStore();
+  // Use selective Zustand subscriptions to avoid infinite re-renders
+  const user = authStore((state) => state.user);
+  const updateUser = authStore((state) => state.updateUser);
+  const logout = authStore((state) => state.logout);
+  const loading = authStore((state) => state.loading);
+  const clearDocuments = documentStore((state) => state.clearDocuments);
 
   // Form state
   const [email, setEmail] = useState(user?.email || "");
@@ -102,9 +106,9 @@ export default function ProfileScreen() {
       {
         text: "Logout",
         style: "destructive",
-        onPress: () => {
+        onPress: async () => {
           clearDocuments(); // Clear documents from store
-          logout(); // Logout user
+          await logout(); // Await async logout
           router.replace("/"); // Navigate to login screen
         },
       },

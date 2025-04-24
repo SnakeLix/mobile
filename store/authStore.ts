@@ -126,12 +126,14 @@ export const authStore = create<AuthStore>()(
         }
       },
 
-      logout: () => {
-        set({ user: null, token: null });
+      logout: async () => {
+        await set({ user: null, token: null });
       },
 
       // State setters
-      setUser: (user) => set({ user }),
+      setUser: async (user) => {
+        await set({ user });
+      },
       setToken: (token) => set({ token }),
       setLoading: (loading) => set({ loading }),
       setError: (error) => set({ error }),

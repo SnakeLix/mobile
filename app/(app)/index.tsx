@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from "react";
-import { View, StyleSheet } from "react-native";
+import { View, StyleSheet, Text } from "react-native";
 import { useRouter, Redirect } from "expo-router";
 import BottomNavigation from "@/components/BottomNavigation";
 import { documentStore } from "@/store/documentStore";
@@ -36,6 +36,7 @@ export default function AppIndex() {
 
   return (
     <View style={styles.container}>
+      <Text>Loading...</Text>
       {/* Bottom navigation bar */}
       <BottomNavigation
         onScanPress={handleScanPress}
