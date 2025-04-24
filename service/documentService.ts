@@ -83,11 +83,22 @@ export const deleteDocument = async (documentId: UUID): Promise<Document> => {
 
 /**
  * Upload a document image and get the image URL
+ * Accepts either a File object or an image URI string
  */
-export const uploadDocumentImage = async (imageFile: File): Promise<string> => {
+export const uploadDocumentImage = async (
+  image: File | string
+): Promise<string> => {
   try {
-    const formData = new FormData();
-    formData.append("file", imageFile);
+    let formData = new FormData();
+    
+    if (typeof image === 'string') {
+      // If image is a URI string, convert it to FormData using our utility
+      const { imageUriToFormData } = require('@/utils/fileUtils');
+      formData = imageUriToFormData(image);
+    } else {
+      // If image is already a File object, create FormData manually
+      formData.append('file', image);
+    }
 
     const response = await axios.post("/upload-image", formData, {
       headers: {

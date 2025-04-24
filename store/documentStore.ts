@@ -29,7 +29,7 @@ interface DocumentStore {
   addDocument: (document: DocumentCreate) => Promise<Document>;
   editDocument: (id: UUID, document: DocumentUpdate) => Promise<Document>;
   removeDocument: (id: UUID) => Promise<void>;
-  uploadImage: (file: File) => Promise<string>;
+  uploadImage: (file: File | string) => Promise<string>;
 
   // State management
   setCurrentDocument: (document: Document | null) => void;
@@ -150,7 +150,7 @@ export const documentStore = create<DocumentStore>()(
         }
       },
 
-      uploadImage: async (file: File) => {
+      uploadImage: async (file: File | string) => {
         try {
           set({ loading: true, error: null });
           const imageUrl = await uploadDocumentImage(file);

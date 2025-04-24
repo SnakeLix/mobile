@@ -26,7 +26,7 @@ export default function AppLayout() {
         name="scan"
         options={{
           title: "Scanner",
-          headerShown: true,
+          headerShown: false,
           headerStyle: { backgroundColor: "#10ac84" },
           headerTintColor: "#fff",
         }}
