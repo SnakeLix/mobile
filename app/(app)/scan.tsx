@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   StyleSheet,
   View,
@@ -12,29 +12,31 @@ import {
   Modal,
   AppState,
 } from "react-native";
-import { CameraView, CameraType, useCameraPermissions } from "expo-camera";
+import { CameraView, CameraType } from "expo-camera";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { documentStore } from "@/store/documentStore";
 import { Document, Page } from "@/types/document";
-import BottomNavigation from "@/components/BottomNavigation";
 import FloatingProcessBubble from "@/components/FloatingProcessBubble";
 import { createDocument, uploadDocumentImage } from "@/service/documentService";
-import * as FileSystem from "expo-file-system";
-import { imageUriToFormData, uriToFile } from "@/utils/fileUtils";
+import { useCamera } from "@/components/scan/hooks/useCamera";
+import CameraControls from "@/components/scan/ui/CameraControls";
 
 export default function ScanScreen() {
   const router = useRouter();
   const { addDocument } = documentStore();
-  const [permission, requestPermission] = useCameraPermissions();
-  const cameraRef = useRef<any>(null);
-
-  // All state declarations - keep them together at the top
-  const [facing, setFacing] = useState<CameraType>("back");
+  const {
+    permission,
+    requestPermission,
+    cameraRef,
+    facing,
+    isCapturing,
+    toggleCameraFacing,
+    takePicture: captureImage,
+  } = useCamera();
   const [isProcessing, setIsProcessing] = useState(false);
   const [capturedImages, setCapturedImages] = useState<Page[]>([]);
   const [documentTitle, setDocumentTitle] = useState("");
-  const [showPreview, setShowPreview] = useState(false);
   const [ocrPages, setOcrPages] = useState<Page[]>([]);
   const [step, setStep] = useState<
     "camera" | "review" | "list" | "processing" | "title" | "success"
@@ -46,8 +48,6 @@ export default function ScanScreen() {
   const [backgroundProcessingComplete, setBackgroundProcessingComplete] =
     useState(false);
   const [isProcessingMinimized, setIsProcessingMinimized] = useState(false);
-
-  // All useEffect hooks - group them together
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextAppState) => {
       if (processingInBackground && nextAppState === "active") {
@@ -56,53 +56,26 @@ export default function ScanScreen() {
         }
       }
     });
-
     return () => {
       subscription.remove();
     };
   }, [processingInBackground, backgroundProcessingComplete, router]);
-
-  // Function declarations
-  function toggleCameraFacing() {
-    setFacing((current) => (current === "back" ? "front" : "back"));
-  }
-
   function handleMinimizeProcessing() {
     setIsProcessingMinimized(true);
   }
-
   function handleMaximizeProcessing() {
     setIsProcessingMinimized(false);
   }
-
-  async function takePicture() {
-    if (!cameraRef.current) return;
-    try {
-      setIsProcessing(true);
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.8,
-        base64: false,
-        skipProcessing: false,
-      });
-      const newPage: Page = {
-        image_url: photo.uri,
-        text: "Scanned text would appear here...",
-      };
+  const handleTakePicture = useCallback(async () => {
+    const newPage = await captureImage();
+    if (newPage) {
       setCurrentImage(newPage);
       setStep("review");
-      setIsProcessing(false);
-    } catch (error) {
-      console.error("Error taking picture:", error);
-      setIsProcessing(false);
-      Alert.alert("Error", "Failed to capture image. Please try again.");
     }
-  }
-
-  // Placeholder for edit image
+  }, [captureImage]);
   function handleEditImage() {
     Alert.alert("Edit", "Image editing not implemented yet.");
   }
-
   function handleNextImage() {
     if (currentImage) {
       setCapturedImages((prev) => [...prev, currentImage]);
@@ -110,7 +83,6 @@ export default function ScanScreen() {
       setStep("camera");
     }
   }
-
   function handleDoneCapture() {
     if (currentImage) {
       setCapturedImages((prev) => [...prev, currentImage]);
@@ -118,21 +90,17 @@ export default function ScanScreen() {
     }
     setStep("list");
   }
-
   function handleRemoveImage(index: number) {
+    router.replace("/");
     setCapturedImages(capturedImages.filter((_, i) => i !== index));
   }
-
-  // Mock OCR function
   async function mockOcrInference(
     imageUri: string,
     index: number
   ): Promise<string> {
-    // Simulate a delay for OCR processing
     await new Promise((resolve) => setTimeout(resolve, 100));
     return `Mock OCR text for page ${index + 1} (image: ${imageUri})`;
   }
-
   async function handleProcess() {
     if (capturedImages.length === 0) {
       Alert.alert(
@@ -141,35 +109,22 @@ export default function ScanScreen() {
       );
       return;
     }
-
     setStep("processing");
     setIsProcessing(true);
-
+    setProcessedCount(0);
     try {
-      // Process all captured images with OCR and upload
-      const processedPages = await Promise.all(
-        capturedImages.map(async (page, idx) => {
-          // 1. Mock OCR inference - keep this as requested
-          const text = await mockOcrInference(page.image_url, idx);
-
-          // 2. Real image upload using document service
-          // Use our utility function to upload the image directly from URI
-          const uploadedUrl = await uploadDocumentImage(page.image_url);
-
-          return {
-            image_url: uploadedUrl,
-            text,
-          };
-        })
-      );
-
-      // Store the processed pages with OCR text
+      const processedPagesPromises = capturedImages.map(async (page, idx) => {
+        const text = await mockOcrInference(page.image_url, idx);
+        const uploadedUrl = await uploadDocumentImage(page.image_url);
+        setProcessedCount((prev) => prev + 1);
+        return {
+          image_url: uploadedUrl,
+          text,
+        };
+      });
+      const processedPages = await Promise.all(processedPagesPromises);
       setOcrPages(processedPages);
-
-      // Stop processing indicator
       setIsProcessing(false);
-
-      // Proceed to title entry screen
       setStep("title");
     } catch (error) {
       console.error("Error processing document:", error);
@@ -178,22 +133,20 @@ export default function ScanScreen() {
         "Processing Error",
         "Failed to process and save document. Please try again."
       );
-      setStep("list"); // Return to list on error
+      setStep("list");
     }
   }
-
   if (!permission) {
     return (
-      <View style={styles.container}>
+      <View style={styles.permissionContainer}>
         <ActivityIndicator size="large" />
         <Text>Requesting Camera Permission...</Text>
       </View>
     );
   }
-
   if (!permission.granted) {
     return (
-      <View style={styles.container}>
+      <View style={styles.permissionContainer}>
         <Text style={styles.permissionText}>
           Camera access is required to scan documents.
         </Text>
@@ -206,7 +159,6 @@ export default function ScanScreen() {
       </View>
     );
   }
-
   function handleSkipImage() {
     Alert.alert(
       "Skip Image",
@@ -224,7 +176,6 @@ export default function ScanScreen() {
       ]
     );
   }
-
   function handleRetakeImage() {
     Alert.alert(
       "Retake Image",
@@ -242,102 +193,79 @@ export default function ScanScreen() {
       ]
     );
   }
-
-  // Handle saving document after user enters title
   async function handleSaveDocument() {
-    // Validate that we have processed pages
     if (ocrPages.length === 0) {
       Alert.alert("Error", "No processed pages to save. Please try again.");
       return;
     }
-
-    // Use user-provided title or generate a default one
     const title =
       documentTitle.trim() || `Scanned Document ${new Date().toLocaleString()}`;
-
     setIsProcessing(true);
-
     try {
-      // Save document using the document store
       await addDocument({
         title: title,
         data: { pages: ocrPages },
       });
-
       setIsProcessing(false);
-      setStep("success"); // Show success message
+      setStep("success");
+      setCapturedImages([]);
+      setOcrPages([]);
+      setDocumentTitle("");
+      setCurrentImage(null);
     } catch (error) {
       console.error("Error saving document:", error);
       setIsProcessing(false);
       Alert.alert("Save Error", "Failed to save document. Please try again.");
     }
   }
-
-  // Function to handle background processing
-  async function handleBackgroundProcess() {
-    // Mark as processing in background
-    setProcessingInBackground(true);
-
-    // Allow user to navigate away
+  const exitFlow = () => {
+    setShowImagesModal(false);
+    setCurrentImage(null);
+    setCapturedImages([]);
+    setOcrPages([]);
+    setDocumentTitle("");
+    setStep("camera");
     router.replace("/home");
-
+  };
+  async function handleBackgroundProcess() {
+    setProcessingInBackground(true);
+    setIsProcessing(true);
+    setProcessedCount(0);
+    router.replace("/home");
     try {
-      // Process images in background
       const processedPages = [];
       for (let i = 0; i < capturedImages.length; i++) {
         const page = capturedImages[i];
-
-        // Process one image at a time
         const text = await mockOcrInference(page.image_url, i);
         const uploadedUrl = await uploadDocumentImage(page.image_url);
-
-        // Add to processed pages
-        processedPages.push({
-          image_url: uploadedUrl,
-          text,
-        });
-
-        // Update progress count
-        setProcessedCount(i + 1);
+        processedPages.push({ image_url: uploadedUrl, text });
+        setProcessedCount((prev) => prev + 1);
       }
-
-      // Store processed data
       setOcrPages(processedPages);
       setBackgroundProcessingComplete(true);
-
-      // Notify user of completion
-      Alert.alert(
-        "Processing Complete",
-        "Your document has been processed successfully. Would you like to add a title and save it now?",
-        [
-          {
-            text: "Later",
-            style: "cancel",
-            onPress: () => console.log("User will save document later"),
-          },
-          {
-            text: "Save Now",
-            onPress: () => router.push("/scan?step=title"),
-          },
-        ]
-      );
+      console.log("Background processing complete.");
     } catch (error) {
       console.error("Background processing error:", error);
-      Alert.alert(
-        "Processing Error",
-        "Failed to process document in the background. Please try again."
-      );
+      setBackgroundProcessingComplete(true);
     } finally {
       setIsProcessing(false);
       setProcessingInBackground(false);
     }
   }
-
   return (
     <View style={styles.container}>
+      {step === "camera" && (
+        <CameraView ref={cameraRef} style={styles.camera} facing={facing}>
+          <CameraControls
+            isProcessing={isCapturing}
+            onTakePicture={handleTakePicture}
+            onToggleFacing={toggleCameraFacing}
+            onShowImages={() => setShowImagesModal(true)}
+          />
+        </CameraView>
+      )}
       {step === "review" && currentImage && (
         <View style={{ flex: 1, backgroundColor: "#fff" }}>
-          {/* Top bar with Done and Show (n) images buttons */}
           <View
             style={{
               flexDirection: "row",
@@ -351,23 +279,29 @@ export default function ScanScreen() {
             <TouchableOpacity
               style={{
                 padding: 5,
-                // Background color light red
                 backgroundColor: "#fff0f0",
                 borderRadius: 20,
-                elevation: 5,
-                shadowColor: "#000",
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.2,
-                shadowRadius: 2,
               }}
-              onPress={() => router.replace("/home")}
+              onPress={() => {
+                Alert.alert(
+                  "Discard Image",
+                  "Are you sure you want to discard this image?",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Discard",
+                      onPress: () => {
+                        exitFlow();
+                      },
+                    },
+                  ]
+                );
+              }}
             >
-              {/* Exit button with background red */}
               <Ionicons name="close" size={28} color="#e74c3c" />
             </TouchableOpacity>
             <TouchableOpacity
               style={{
-                flexDirection: "row",
                 alignItems: "center",
                 backgroundColor: "#10ac84",
                 borderRadius: 20,
@@ -376,7 +310,6 @@ export default function ScanScreen() {
               }}
               onPress={() => setShowImagesModal(true)}
             >
-              <Ionicons name="images-outline" size={20} color="#fff" />
               <Text
                 style={{
                   color: "#fff",
@@ -384,7 +317,9 @@ export default function ScanScreen() {
                   marginLeft: 6,
                   fontSize: 15,
                 }}
-              >{`Show (${capturedImages.length + 1}) images`}</Text>
+              >{`Show (${
+                capturedImages.length + (currentImage ? 1 : 0)
+              }) images`}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={{
@@ -400,7 +335,6 @@ export default function ScanScreen() {
               </Text>
             </TouchableOpacity>
           </View>
-          {/* Image preview */}
           <View
             style={{ flex: 1, justifyContent: "center", alignItems: "center" }}
           >
@@ -409,7 +343,6 @@ export default function ScanScreen() {
               style={{ width: 260, height: 360, borderRadius: 10 }}
             />
           </View>
-          {/* Bottom action buttons */}
           <View
             style={{
               flexDirection: "row",
@@ -421,7 +354,6 @@ export default function ScanScreen() {
               style={[
                 styles.actionButton,
                 {
-                  backgroundColor: "#e9f8ef",
                   borderWidth: 1,
                   borderColor: "#10ac84",
                 },
@@ -456,7 +388,6 @@ export default function ScanScreen() {
               style={[
                 styles.actionButton,
                 {
-                  backgroundColor: "#fff0f0",
                   borderWidth: 1,
                   borderColor: "#e74c3c",
                 },
@@ -476,7 +407,6 @@ export default function ScanScreen() {
           </View>
         </View>
       )}
-      {/* Modal to show captured images (full screen) */}
       <Modal
         visible={showImagesModal}
         animationType="slide"
@@ -484,20 +414,11 @@ export default function ScanScreen() {
         onRequestClose={() => setShowImagesModal(false)}
       >
         <View style={{ flex: 1, backgroundColor: "#fff" }}>
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: 16,
-              borderBottomWidth: 1,
-              borderColor: "#eee",
-            }}
-          >
+          <View style={styles.modalHeader}>
             <TouchableOpacity onPress={() => setShowImagesModal(false)}>
               <Ionicons name="arrow-back" size={28} color="#10ac84" />
             </TouchableOpacity>
-            <Text style={{ fontWeight: "bold", fontSize: 18, color: "#222" }}>
+            <Text style={styles.modalTitle}>
               Captured Images (
               {currentImage ? capturedImages.length + 1 : capturedImages.length}
               )
@@ -505,203 +426,116 @@ export default function ScanScreen() {
             <View style={{ width: 28 }} />
           </View>
           <ScrollView
-            contentContainerStyle={{ padding: 20, paddingBottom: 100 }}
+            contentContainerStyle={styles.modalScrollContent}
             showsVerticalScrollIndicator={true}
           >
-            {currentImage && (
-              <View style={{ marginBottom: 24, alignItems: "center" }}>
+            {step === "review" && currentImage && (
+              <View style={styles.modalImageContainer}>
                 <Image
                   source={{ uri: currentImage.image_url }}
-                  style={{
-                    width: 220,
-                    height: 300,
-                    borderRadius: 10,
-                    borderWidth: 1,
-                    borderColor: "#ccc",
-                  }}
+                  style={styles.modalImage}
                 />
-                <Text
-                  style={{ marginTop: 8, color: "#333", fontWeight: "500" }}
-                >
+                <Text style={styles.modalImageLabel}>
                   Current Image (Not Saved)
                 </Text>
               </View>
             )}
             {capturedImages.map((page, idx) => (
-              <View
-                key={idx}
-                style={{ marginBottom: 24, alignItems: "center" }}
-              >
+              <View key={idx} style={styles.modalImageContainer}>
                 <Image
                   source={{ uri: page.image_url }}
-                  style={{
-                    width: 220,
-                    height: 300,
-                    borderRadius: 10,
-                    borderWidth: 1,
-                    borderColor: "#ccc",
-                  }}
+                  style={styles.modalImage}
                 />
-                <Text
-                  style={{ marginTop: 8, color: "#333", fontWeight: "500" }}
+                <TouchableOpacity
+                  style={styles.modalRemoveButton}
+                  onPress={() => handleRemoveImage(idx)}
                 >
-                  Page {idx + 1}
-                </Text>
+                  <Ionicons name="close-circle" size={28} color="#e74c3c" />
+                </TouchableOpacity>
+                <Text style={styles.modalImageLabel}>Page {idx + 1}</Text>
               </View>
             ))}
           </ScrollView>
-
-          {/* Done button at the bottom of the modal */}
-          <View
-            style={{
-              position: "absolute",
-              bottom: 0,
-              left: 0,
-              right: 0,
-              padding: 16,
-              backgroundColor: "#fff",
-              borderTopWidth: 1,
-              borderColor: "#eee",
-              shadowColor: "#000",
-              shadowOffset: { width: 0, height: -2 },
-              shadowOpacity: 0.1,
-              shadowRadius: 4,
-              elevation: 5,
-              flexDirection: "row", // Make buttons flex row
-              gap: 12, // Add gap between buttons (React Native 0.71+)
-            }}
-          >
-            {/* Add Exit  */}
+          <View style={styles.modalFooter}>
             <TouchableOpacity
-              style={{
-                backgroundColor: "#e74c3c",
-                paddingVertical: 14,
-                borderRadius: 8,
-                alignItems: "center",
-                flex: 1, // Make button flex
-                marginBottom: 0, // Remove margin, handled by gap
-              }}
+              style={[styles.modalButton, { backgroundColor: "#e74c3c" }]}
               onPress={() => {
-                setShowImagesModal(false);
-                setCurrentImage(null);
-                router.push("/home");
+                exitFlow();
               }}
             >
-              <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>
-                Exit
-              </Text>
+              <Text style={styles.modalButtonText}>Exit & Discard</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={{
-                backgroundColor: "#10ac84",
-                paddingVertical: 14,
-                borderRadius: 8,
-                alignItems: "center",
-                flex: 1, // Make button flex
-              }}
+              style={[styles.modalButton, { backgroundColor: "#10ac84" }]}
               onPress={() => {
                 setShowImagesModal(false);
-                if (step === "review" && currentImage) {
-                  // Continue with the current review
-                } else if (capturedImages.length > 0) {
-                  // Go to list view if coming from camera
+                if (step === "camera" && capturedImages.length > 0) {
                   setStep("list");
+                } else if (step === "list") {
+                } else if (step === "review") {
+                } else {
+                  if (capturedImages.length > 0) setStep("list");
+                  else setStep("camera");
                 }
               }}
             >
-              <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>
-                Done
-              </Text>
+              <Text style={styles.modalButtonText}>Done</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
-      {step === "camera" && (
-        <CameraView ref={cameraRef} style={styles.camera} facing={facing}>
-          <View style={styles.cameraOverlay}>
-            <TouchableOpacity
-              style={styles.captureButton}
-              onPress={takePicture}
-              disabled={isProcessing}
-            >
-              {isProcessing ? (
-                <ActivityIndicator color="#fff" size="large" />
-              ) : (
-                <Ionicons name="camera-outline" size={40} color="#fff" />
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={{ position: "absolute", top: 30, right: 30 }}
-              onPress={toggleCameraFacing}
-            >
-              <Ionicons name="camera-reverse-outline" size={32} color="#fff" />
-            </TouchableOpacity>
-            {/* Back button to show images modal */}
-            <TouchableOpacity
-              style={{ position: "absolute", top: 30, left: 30 }}
-              onPress={() => setShowImagesModal(true)}
-            >
-              <Ionicons name="arrow-back" size={32} color="#fff" />
-            </TouchableOpacity>
-          </View>
-        </CameraView>
-      )}
       {step === "list" && (
         <View style={{ flex: 1, backgroundColor: "#fff", padding: 16 }}>
-          {/* Header with back button */}
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              marginBottom: 15,
-              paddingTop: 10,
-            }}
-          >
+          <View style={styles.listHeader}>
             <TouchableOpacity
               style={{ padding: 5 }}
               onPress={() => setStep("camera")}
             >
               <Ionicons name="arrow-back" size={28} color="#10ac84" />
             </TouchableOpacity>
-            <Text style={styles.previewTitle}>
+            <Text style={styles.listTitle}>
               Captured Images ({capturedImages.length})
             </Text>
           </View>
-
-          {/* Document title input */}
           <TextInput
             style={styles.titleInput}
-            placeholder="Enter document title"
+            placeholder="Enter document title (optional)"
             value={documentTitle}
             onChangeText={setDocumentTitle}
           />
           <ScrollView>
-            {capturedImages.map((page, idx) => (
-              <View
-                key={idx}
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  marginBottom: 12,
-                }}
-              >
-                <Image
-                  source={{ uri: page.image_url }}
-                  style={{
-                    width: 80,
-                    height: 110,
-                    borderRadius: 8,
-                    marginRight: 12,
-                  }}
-                />
-                <TouchableOpacity onPress={() => handleRemoveImage(idx)}>
-                  <Ionicons name="close-circle" size={24} color="#e74c3c" />
-                </TouchableOpacity>
-              </View>
-            ))}
+            {capturedImages.length === 0 ? (
+              <Text style={styles.emptyListText}>
+                No images captured yet. Go back to capture.
+              </Text>
+            ) : (
+              capturedImages.map((page, idx) => (
+                <View key={idx} style={styles.listItemContainer}>
+                  <Image
+                    source={{ uri: page.image_url }}
+                    style={styles.listItemImage}
+                  />
+                  <Text style={styles.listItemLabel}>Page {idx + 1}</Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      exitFlow();
+                    }}
+                    style={styles.listItemRemove}
+                  >
+                    <Ionicons name="close-circle" size={24} color="#e74c3c" />
+                  </TouchableOpacity>
+                </View>
+              ))
+            )}
           </ScrollView>
           <TouchableOpacity
-            style={[styles.actionButton, styles.saveButton, { marginTop: 20 }]}
+            style={[
+              styles.actionButton,
+              styles.saveButton,
+              { marginTop: 20 },
+              (isProcessing || capturedImages.length === 0) &&
+                styles.disabledButton,
+            ]}
             onPress={handleProcess}
             disabled={isProcessing || capturedImages.length === 0}
           >
@@ -709,96 +543,64 @@ export default function ScanScreen() {
               <ActivityIndicator color="#fff" />
             ) : (
               <>
-                <Ionicons name="cloud-upload-outline" size={22} color="#fff" />
-                <Text style={styles.actionButtonText}>Process</Text>
+                <Ionicons
+                  name="cloud-upload-outline"
+                  size={22}
+                  color="#fff"
+                  style={{ marginRight: 8 }}
+                />
+                <Text style={styles.actionButtonText}>Process Document</Text>
               </>
             )}
           </TouchableOpacity>
         </View>
       )}
       {step === "processing" && !isProcessingMinimized && (
-        <View
-          style={{
-            flex: 1,
-            justifyContent: "center",
-            alignItems: "center",
-            padding: 20,
-          }}
-        >
+        <View style={styles.processingContainer}>
           <ActivityIndicator size="large" color="#10ac84" />
-          <Text
-            style={{
-              marginTop: 20,
-              color: "#333",
-              fontSize: 16,
-              marginBottom: 15,
-            }}
-          >
-            Processing images...
-          </Text>
-
-          {/* Progress bar showing processing status */}
+          <Text style={styles.processingText}>Processing images...</Text>
           <View style={styles.progressBarContainer}>
             <View
               style={[
                 styles.progressBar,
-                { width: `${(processedCount / capturedImages.length) * 100}%` },
+                {
+                  width: `${
+                    capturedImages.length > 0
+                      ? (processedCount / capturedImages.length) * 100
+                      : 0
+                  }%`,
+                },
               ]}
             />
           </View>
-
-          <Text style={{ marginTop: 10, color: "#666", marginBottom: 20 }}>
+          <Text style={styles.progressText}>
             {processedCount} of {capturedImages.length} pages processed
           </Text>
-
-          {/* <TouchableOpacity
-              style={styles.backgroundProcessButton}
-              onPress={handleMinimizeProcessing}
-            >
-              <Text style={styles.backgroundProcessText}>Minimize to corner</Text>
-            </TouchableOpacity> */}
         </View>
       )}
-      {/* Show success message after processing */}
       {step === "success" && (
-        <View
-          style={{ flex: 1, justifyContent: "center", alignItems: "center" }}
-        >
+        <View style={styles.successContainer}>
           <Ionicons
             name="checkmark-circle"
             size={80}
             color="#10ac84"
             style={{ marginBottom: 20 }}
           />
-          <Text
-            style={{
-              fontSize: 22,
-              fontWeight: "bold",
-              color: "#10ac84",
-              marginBottom: 10,
-            }}
-          >
-            Document Created!
-          </Text>
-          <Text style={{ color: "#333", marginBottom: 30 }}>
-            Your document has been successfully created.
+          <Text style={styles.successTitle}>Document Created!</Text>
+          <Text style={styles.successSubtitle}>
+            Your document "{documentTitle || "Untitled"}" has been saved.
           </Text>
           <TouchableOpacity
-            style={{
-              backgroundColor: "#10ac84",
-              paddingHorizontal: 32,
-              paddingVertical: 12,
-              borderRadius: 8,
+            style={styles.successButton}
+            onPress={() => {
+              setStep("camera");
+              router.replace("/home");
             }}
-            onPress={() => router.replace("/home")}
           >
-            <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>
-              Go to Home
-            </Text>
+            <Text style={styles.successButtonText}>Go to Home</Text>
           </TouchableOpacity>
         </View>
       )}
-      {/* Title entry screen after processing */}
       {step === "title" && (
         <View style={styles.titleScreenContainer}>
           <View style={styles.titleCard}>
@@ -808,23 +610,17 @@ export default function ScanScreen() {
               color="#10ac84"
               style={styles.titleIcon}
             />
-
-            <Text style={styles.titleScreenHeading}>
-              Document Processed Successfully
-            </Text>
-
+            <Text style={styles.titleScreenHeading}>Document Processed</Text>
             <Text style={styles.titleScreenSubheading}>
-              Please enter a title for your document
+              Enter a title to save your document
             </Text>
-
             <TextInput
               style={styles.titleScreenInput}
-              placeholder="Enter document title"
+              placeholder="Enter document title (optional)"
               value={documentTitle}
               onChangeText={setDocumentTitle}
               autoFocus={true}
             />
-
             <View style={styles.previewImagesContainer}>
               <Text style={styles.previewLabel}>
                 {ocrPages.length} {ocrPages.length === 1 ? "page" : "pages"}{" "}
@@ -844,9 +640,11 @@ export default function ScanScreen() {
                 ))}
               </ScrollView>
             </View>
-
             <TouchableOpacity
-              style={styles.saveDocumentButton}
+              style={[
+                styles.saveDocumentButton,
+                isProcessing && styles.disabledButton,
+              ]}
               onPress={handleSaveDocument}
               disabled={isProcessing}
             >
@@ -859,19 +657,8 @@ export default function ScanScreen() {
           </View>
         </View>
       )}
-      {/* <BottomNavigation
-        onScanPress={() => router.push("/scan")}
-        onDocumentsPress={() => router.push("/home")}
-        onProfilePress={() => router.push("/profile")}
-      /> */}
-      {/* Floating bubble for minimized processing */}
       {step === "processing" && isProcessingMinimized && (
-        <FloatingProcessBubble
-          visible={true}
-          processedCount={processedCount}
-          totalCount={capturedImages.length}
-          onPress={handleMaximizeProcessing}
-        />
+        <FloatingProcessBubble />
       )}
     </View>
   );
@@ -879,18 +666,23 @@ export default function ScanScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff" },
+  permissionContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
   permissionText: {
     fontSize: 16,
     color: "#333",
     textAlign: "center",
-    marginTop: 20,
-    paddingHorizontal: 40,
+    marginBottom: 20,
+    paddingHorizontal: 20,
   },
   permissionButton: {
-    marginTop: 20,
     backgroundColor: "#10ac84",
     paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingHorizontal: 30,
     borderRadius: 8,
   },
   permissionButtonText: {
@@ -899,89 +691,180 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   camera: { flex: 1 },
-  cameraOverlay: {
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 16,
+    borderBottomWidth: 1,
+    borderColor: "#eee",
+    paddingTop: 40,
+  },
+  modalTitle: {
+    fontWeight: "bold",
+    fontSize: 18,
+    color: "#222",
+  },
+  modalScrollContent: {
+    padding: 20,
+    paddingBottom: 100,
+  },
+  modalImageContainer: {
+    marginBottom: 24,
+    alignItems: "center",
+    position: "relative",
+  },
+  modalImage: {
+    width: 220,
+    height: 300,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#ccc",
+  },
+  modalRemoveButton: {
+    position: "absolute",
+    top: 5,
+    right: 5,
+    backgroundColor: "rgba(255, 255, 255, 0.7)",
+    borderRadius: 15,
+    padding: 2,
+  },
+  modalImageLabel: {
+    marginTop: 8,
+    color: "#333",
+    fontWeight: "500",
+  },
+  modalFooter: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 16,
+    backgroundColor: "#fff",
+    borderTopWidth: 1,
+    borderColor: "#eee",
+    flexDirection: "row",
+    gap: 12,
+  },
+  modalButton: {
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: "center",
     flex: 1,
-    justifyContent: "flex-end",
-    alignItems: "center",
-    paddingBottom: 30,
   },
-  captureButton: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: "#10ac84",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 20,
+  modalButtonText: {
+    color: "#fff",
+    fontWeight: "bold",
+    fontSize: 16,
   },
-  previewContainer: { flex: 1, padding: 16 },
-  titleInput: {
+  listHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 15,
+    paddingTop: 10,
+  },
+  listTitle: {
     fontSize: 18,
     fontWeight: "600",
     color: "#333",
-    marginBottom: 10,
+    marginLeft: 15,
+  },
+  titleInput: {
+    fontSize: 16,
+    color: "#333",
+    marginBottom: 15,
     borderBottomWidth: 1,
     borderColor: "#ccc",
     paddingVertical: 8,
+    paddingHorizontal: 5,
   },
-  previewTitle: {
+  emptyListText: {
+    textAlign: "center",
+    marginTop: 50,
     fontSize: 16,
-    fontWeight: "600",
-    color: "#333",
-    marginVertical: 10,
+    color: "#888",
   },
-  imagePreviewContainer: {
-    position: "relative",
-    marginBottom: 16,
-  },
-  imagePreview: {
-    width: "100%",
-    height: 200,
-    borderRadius: 8,
-    resizeMode: "cover",
-  },
-  removeButton: {
-    position: "absolute",
-    top: 8,
-    right: 8,
-  },
-  actionButton: {
+  listItemContainer: {
     flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+    backgroundColor: "#f9f9f9",
+    padding: 8,
+    borderRadius: 8,
+  },
+  listItemImage: {
+    width: 60,
+    height: 85,
+    borderRadius: 6,
+    marginRight: 12,
+  },
+  listItemLabel: {
+    flex: 1,
+    fontSize: 15,
+    color: "#444",
+  },
+  listItemRemove: {
+    padding: 5,
+  },
+  processingContainer: {
+    flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    padding: 14,
-    borderRadius: 8,
+    padding: 20,
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
+  },
+  processingText: {
     marginTop: 20,
+    color: "#333",
+    fontSize: 16,
+    marginBottom: 15,
   },
-  saveButton: {
+  progressBarContainer: {
+    width: "80%",
+    height: 10,
+    backgroundColor: "#eee",
+    borderRadius: 5,
+    overflow: "hidden",
+  },
+  progressBar: {
+    height: "100%",
     backgroundColor: "#10ac84",
+    borderRadius: 5,
   },
-  actionButtonText: {
-    color: "#fff",
-    fontWeight: "600",
-    marginLeft: 8,
+  progressText: {
+    marginTop: 10,
+    color: "#666",
+    marginBottom: 20,
   },
-  capturedBadge: {
-    position: "absolute",
-    top: 40,
-    left: 24,
-    backgroundColor: "#10ac84",
-    flexDirection: "row",
+  successContainer: {
+    flex: 1,
+    justifyContent: "center",
     alignItems: "center",
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    zIndex: 10,
-    elevation: 5,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
+    padding: 20,
   },
-  capturedBadgeText: {
+  successTitle: {
+    fontSize: 22,
+    fontWeight: "bold",
+    color: "#10ac84",
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  successSubtitle: {
+    fontSize: 16,
+    color: "#333",
+    marginBottom: 30,
+    textAlign: "center",
+    paddingHorizontal: 20,
+  },
+  successButton: {
+    backgroundColor: "#10ac84",
+    paddingHorizontal: 32,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  successButtonText: {
     color: "#fff",
     fontWeight: "bold",
-    marginLeft: 6,
     fontSize: 16,
   },
   titleScreenContainer: {
@@ -1055,19 +938,27 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "bold",
   },
-  // New styles for progress bar
-  progressBarContainer: {
-    width: "100%",
-    height: 10,
-    backgroundColor: "#eee",
-    borderRadius: 5,
-    overflow: "hidden",
-    marginTop: 20,
+  actionButton: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 25,
+    minWidth: 100,
   },
-  progressBar: {
-    height: "100%",
+  actionButtonText: {
+    color: "#fff",
+    fontWeight: "600",
+    marginLeft: 8,
+    fontSize: 15,
+  },
+  saveButton: {
     backgroundColor: "#10ac84",
-    borderRadius: 5,
+  },
+  disabledButton: {
+    backgroundColor: "#a0a0a0",
+    opacity: 0.7,
   },
   backgroundProcessButton: {
     marginTop: 20,

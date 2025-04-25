@@ -2,24 +2,52 @@ import React from "react";
 import { View, TouchableOpacity, Text, StyleSheet, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 
-const BottomNavigation = ({ onScanPress, onDocumentsPress, onProfilePress }) => {
+const BottomNavigation = ({ onScanPress, onDocumentsPress, onProfilePress, activeTab = "home" }) => {
+    // Determine if a tab is active
+    const isHomeActive = activeTab === "home" || activeTab === "index";
+    const isProfileActive = activeTab === "profile";
+
+    // Colors for active/inactive states
+    const activeColor = "#10ac84";
+    const inactiveColor = "#222f3e";
+
     return (
         <View style={styles.container}>
             {/* Documents Button */}
-            <TouchableOpacity style={styles.tab} onPress={onDocumentsPress}>
-                <Ionicons name="document-text-outline" size={28} color="#222f3e" />
-                <Text style={styles.label}>Documents</Text>
+            <TouchableOpacity
+                style={[styles.tab, isHomeActive && styles.activeTab]}
+                onPress={onDocumentsPress}
+            >
+                <Ionicons
+                    name={isHomeActive ? "document-text" : "document-text-outline"}
+                    size={28}
+                    color={isHomeActive ? activeColor : inactiveColor}
+                />
+                <Text style={[styles.label, isHomeActive && styles.activeLabel]}>
+                    Documents
+                </Text>
             </TouchableOpacity>
+
             {/* Center Scanner Button */}
             <View style={styles.centerButtonWrapper} pointerEvents="box-none">
                 <TouchableOpacity style={styles.centerButton} onPress={onScanPress}>
                     <Ionicons name="scan" size={32} color="#fff" />
                 </TouchableOpacity>
             </View>
+
             {/* Profile Button */}
-            <TouchableOpacity style={styles.tab} onPress={onProfilePress}>
-                <Ionicons name="person" size={28} color="#222f3e" />
-                <Text style={styles.label}>Profile</Text>
+            <TouchableOpacity
+                style={[styles.tab, isProfileActive && styles.activeTab]}
+                onPress={onProfilePress}
+            >
+                <Ionicons
+                    name={isProfileActive ? "person" : "person-outline"}
+                    size={28}
+                    color={isProfileActive ? activeColor : inactiveColor}
+                />
+                <Text style={[styles.label, isProfileActive && styles.activeLabel]}>
+                    Profile
+                </Text>
             </TouchableOpacity>
         </View>
     );
@@ -44,10 +72,19 @@ const styles = StyleSheet.create({
         alignItems: "center",
         flex: 1,
         justifyContent: "center",
+        paddingVertical: 8,
+    },
+    activeTab: {
+        // Optional: add a subtle background color or other styling for active tabs
     },
     label: {
         fontSize: 12,
         marginTop: 2,
+        color: "#222f3e",
+    },
+    activeLabel: {
+        color: "#10ac84",
+        fontWeight: "600",
     },
     centerButtonWrapper: {
         position: "absolute",

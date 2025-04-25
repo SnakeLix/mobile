@@ -15,7 +15,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { authStore } from "@/store/authStore";
 import { documentStore } from "@/store/documentStore";
 import { UserUpdate } from "@/types/user";
-import BottomNavigation from "@/components/BottomNavigation";
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -33,19 +32,6 @@ export default function ProfileScreen() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [localLoading, setLocalLoading] = useState(false);
-
-  // Navigation handlers
-  const handleScanPress = () => {
-    router.push("/scan");
-  };
-
-  const handleDocumentsPress = () => {
-    router.push("/home");
-  };
-
-  const handleProfilePress = () => {
-    router.push("/profile");
-  };
 
   // Toggle edit mode
   const toggleEditMode = () => {
@@ -225,12 +211,6 @@ export default function ProfileScreen() {
         {/* Version info */}
         <Text style={styles.versionText}>App Version 1.0.0</Text>
       </ScrollView>
-
-      <BottomNavigation
-        onScanPress={handleScanPress}
-        onDocumentsPress={handleDocumentsPress}
-        onProfilePress={handleProfilePress}
-      />
     </View>
   );
 }

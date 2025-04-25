@@ -17,7 +17,6 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { documentStore } from "@/store/documentStore";
 import { Document } from "@/types/document";
-import BottomNavigation from "@/components/BottomNavigation";
 import * as Clipboard from "expo-clipboard";
 
 export default function HomeScreen() {
@@ -37,18 +36,6 @@ export default function HomeScreen() {
     // Refresh documents data when screen is focused
     fetchDocuments();
   }, []);
-
-  const handleScanPress = () => {
-    router.push("/scan");
-  };
-
-  const handleDocumentsPress = () => {
-    router.push("/home");
-  };
-
-  const handleProfilePress = () => {
-    router.push("/profile");
-  };
 
   const handleDocumentPress = (document: Document) => {
     documentStore.setState({ currentDocument: document });
@@ -213,11 +200,6 @@ export default function HomeScreen() {
 
       {/* Spacer to prevent content from being hidden under nav */}
       <View style={{ height: 70 }} />
-      <BottomNavigation
-        onScanPress={handleScanPress}
-        onDocumentsPress={handleDocumentsPress}
-        onProfilePress={handleProfilePress}
-      />
 
       <Modal
         visible={showModal}

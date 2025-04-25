@@ -1,12 +1,14 @@
 import React, { useEffect } from "react";
-import { Redirect, Stack, useRouter } from "expo-router";
+import { Redirect, Stack, useRouter, usePathname } from "expo-router";
 import { authStore } from "@/store/authStore";
 import { Alert, View } from "react-native"; // Import View
 import FloatingProcessBubble from "@/components/FloatingProcessBubble"; // Import the bubble component
+import BottomNavigation from "@/components/BottomNavigation"; // Import BottomNavigation
 
 export default function AppLayout() {
   const { user } = authStore();
   const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
     // Redirect to auth screen if user is not logged in
@@ -22,6 +24,30 @@ export default function AppLayout() {
   if (!user) {
     return null; // Or <ActivityIndicator />;
   }
+
+  // Navigation handlers
+  const handleScanPress = () => {
+    router.push("/scan");
+  };
+
+  const handleDocumentsPress = () => {
+    router.push("/home");
+  };
+
+  const handleProfilePress = () => {
+    router.push("/profile");
+  };
+
+  // Determine if we need to show the bottom navigation
+  // Check multiple possible path formats to ensure we catch the scan screen
+  const isScanScreen =
+    pathname === "/(app)/scan" ||
+    pathname === "/scan" ||
+    pathname.includes("scan");
+  const showBottomNav = !isScanScreen;
+
+  // Determine current active tab
+  const currentRoute = pathname.split("/").pop();
 
   // Render the stack navigator for authenticated users
   return (
@@ -60,6 +86,15 @@ export default function AppLayout() {
           }}
         />
       </Stack>
+      {/* Only render the BottomNavigation when not on the scan screen */}
+      {showBottomNav && (
+        <BottomNavigation
+          onScanPress={handleScanPress}
+          onDocumentsPress={handleDocumentsPress}
+          onProfilePress={handleProfilePress}
+          activeTab={currentRoute || "home"}
+        />
+      )}
       {/* Render the floating bubble globally within the app layout */}
       <FloatingProcessBubble />
     </View>
