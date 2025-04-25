@@ -126,8 +126,14 @@ export const authStore = create<AuthStore>()(
         }
       },
 
-      logout: async () => {
-        await set({ user: null, token: null });
+      logout: () => {
+        // Make logout synchronous and clear all relevant state at once
+        set({
+          user: null,
+          token: null,
+          loading: false,
+          error: null,
+        });
       },
 
       // State setters

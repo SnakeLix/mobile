@@ -22,6 +22,7 @@ export default function ProfileScreen() {
   // Use selective Zustand subscriptions to avoid infinite re-renders
   const user = authStore((state) => state.user);
   const updateUser = authStore((state) => state.updateUser);
+  const setUser = authStore((state) => state.setUser);
   const logout = authStore((state) => state.logout);
   const loading = authStore((state) => state.loading);
   const clearDocuments = documentStore((state) => state.clearDocuments);
@@ -106,10 +107,13 @@ export default function ProfileScreen() {
       {
         text: "Logout",
         style: "destructive",
-        onPress: async () => {
-          clearDocuments(); // Clear documents from store
-          await logout(); // Await async logout
-          router.replace("/"); // Navigate to login screen
+        onPress: () => {
+          // First clear documents to avoid stale data
+          // clearDocuments(); // Consider if this is needed or handled elsewhere
+          // Then clear auth state
+          logout();
+          // Finally navigate to the auth screen with replace
+          router.replace("/auth");
         },
       },
     ]);

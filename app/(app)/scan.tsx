@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   StyleSheet,
   View,
@@ -10,6 +10,7 @@ import {
   ScrollView,
   Image,
   Modal,
+  AppState,
 } from "react-native";
 import { CameraView, CameraType, useCameraPermissions } from "expo-camera";
 import { Ionicons } from "@expo/vector-icons";
@@ -17,6 +18,7 @@ import { useRouter } from "expo-router";
 import { documentStore } from "@/store/documentStore";
 import { Document, Page } from "@/types/document";
 import BottomNavigation from "@/components/BottomNavigation";
+import FloatingProcessBubble from "@/components/FloatingProcessBubble";
 import { createDocument, uploadDocumentImage } from "@/service/documentService";
 import * as FileSystem from "expo-file-system";
 import { imageUriToFormData, uriToFile } from "@/utils/fileUtils";
@@ -24,21 +26,54 @@ import { imageUriToFormData, uriToFile } from "@/utils/fileUtils";
 export default function ScanScreen() {
   const router = useRouter();
   const { addDocument } = documentStore();
-  const [facing, setFacing] = useState<CameraType>("back");
   const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<any>(null);
+
+  // All state declarations - keep them together at the top
+  const [facing, setFacing] = useState<CameraType>("back");
   const [isProcessing, setIsProcessing] = useState(false);
   const [capturedImages, setCapturedImages] = useState<Page[]>([]);
   const [documentTitle, setDocumentTitle] = useState("");
   const [showPreview, setShowPreview] = useState(false);
   const [ocrPages, setOcrPages] = useState<Page[]>([]);
-  const cameraRef = useRef<any>(null);
-
-  // Step state with new "title" step
   const [step, setStep] = useState<
     "camera" | "review" | "list" | "processing" | "title" | "success"
   >("camera");
   const [currentImage, setCurrentImage] = useState<Page | null>(null);
   const [showImagesModal, setShowImagesModal] = useState(false);
+  const [processedCount, setProcessedCount] = useState(0);
+  const [processingInBackground, setProcessingInBackground] = useState(false);
+  const [backgroundProcessingComplete, setBackgroundProcessingComplete] =
+    useState(false);
+  const [isProcessingMinimized, setIsProcessingMinimized] = useState(false);
+
+  // All useEffect hooks - group them together
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextAppState) => {
+      if (processingInBackground && nextAppState === "active") {
+        if (backgroundProcessingComplete) {
+          router.push("/scan?step=title");
+        }
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [processingInBackground, backgroundProcessingComplete, router]);
+
+  // Function declarations
+  function toggleCameraFacing() {
+    setFacing((current) => (current === "back" ? "front" : "back"));
+  }
+
+  function handleMinimizeProcessing() {
+    setIsProcessingMinimized(true);
+  }
+
+  function handleMaximizeProcessing() {
+    setIsProcessingMinimized(false);
+  }
 
   async function takePicture() {
     if (!cameraRef.current) return;
@@ -94,7 +129,7 @@ export default function ScanScreen() {
     index: number
   ): Promise<string> {
     // Simulate a delay for OCR processing
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 100));
     return `Mock OCR text for page ${index + 1} (image: ${imageUri})`;
   }
 
@@ -172,10 +207,6 @@ export default function ScanScreen() {
     );
   }
 
-  function toggleCameraFacing() {
-    setFacing((current) => (current === "back" ? "front" : "back"));
-  }
-
   function handleSkipImage() {
     Alert.alert(
       "Skip Image",
@@ -242,6 +273,66 @@ export default function ScanScreen() {
     }
   }
 
+  // Function to handle background processing
+  async function handleBackgroundProcess() {
+    // Mark as processing in background
+    setProcessingInBackground(true);
+
+    // Allow user to navigate away
+    router.replace("/home");
+
+    try {
+      // Process images in background
+      const processedPages = [];
+      for (let i = 0; i < capturedImages.length; i++) {
+        const page = capturedImages[i];
+
+        // Process one image at a time
+        const text = await mockOcrInference(page.image_url, i);
+        const uploadedUrl = await uploadDocumentImage(page.image_url);
+
+        // Add to processed pages
+        processedPages.push({
+          image_url: uploadedUrl,
+          text,
+        });
+
+        // Update progress count
+        setProcessedCount(i + 1);
+      }
+
+      // Store processed data
+      setOcrPages(processedPages);
+      setBackgroundProcessingComplete(true);
+
+      // Notify user of completion
+      Alert.alert(
+        "Processing Complete",
+        "Your document has been processed successfully. Would you like to add a title and save it now?",
+        [
+          {
+            text: "Later",
+            style: "cancel",
+            onPress: () => console.log("User will save document later"),
+          },
+          {
+            text: "Save Now",
+            onPress: () => router.push("/scan?step=title"),
+          },
+        ]
+      );
+    } catch (error) {
+      console.error("Background processing error:", error);
+      Alert.alert(
+        "Processing Error",
+        "Failed to process document in the background. Please try again."
+      );
+    } finally {
+      setIsProcessing(false);
+      setProcessingInBackground(false);
+    }
+  }
+
   return (
     <View style={styles.container}>
       {step === "review" && currentImage && (
@@ -257,6 +348,23 @@ export default function ScanScreen() {
               marginBottom: 10,
             }}
           >
+            <TouchableOpacity
+              style={{
+                padding: 5,
+                // Background color light red
+                backgroundColor: "#fff0f0",
+                borderRadius: 20,
+                elevation: 5,
+                shadowColor: "#000",
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.2,
+                shadowRadius: 2,
+              }}
+              onPress={() => router.replace("/home")}
+            >
+              {/* Exit button with background red */}
+              <Ionicons name="close" size={28} color="#e74c3c" />
+            </TouchableOpacity>
             <TouchableOpacity
               style={{
                 flexDirection: "row",
@@ -459,14 +567,37 @@ export default function ScanScreen() {
               shadowOpacity: 0.1,
               shadowRadius: 4,
               elevation: 5,
+              flexDirection: "row", // Make buttons flex row
+              gap: 12, // Add gap between buttons (React Native 0.71+)
             }}
           >
+            {/* Add Exit  */}
+            <TouchableOpacity
+              style={{
+                backgroundColor: "#e74c3c",
+                paddingVertical: 14,
+                borderRadius: 8,
+                alignItems: "center",
+                flex: 1, // Make button flex
+                marginBottom: 0, // Remove margin, handled by gap
+              }}
+              onPress={() => {
+                setShowImagesModal(false);
+                setCurrentImage(null);
+                router.push("/home");
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>
+                Exit
+              </Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={{
                 backgroundColor: "#10ac84",
                 paddingVertical: 14,
                 borderRadius: 8,
                 alignItems: "center",
+                flex: 1, // Make button flex
               }}
               onPress={() => {
                 setShowImagesModal(false);
@@ -585,14 +716,47 @@ export default function ScanScreen() {
           </TouchableOpacity>
         </View>
       )}
-      {step === "processing" && (
+      {step === "processing" && !isProcessingMinimized && (
         <View
-          style={{ flex: 1, justifyContent: "center", alignItems: "center" }}
+          style={{
+            flex: 1,
+            justifyContent: "center",
+            alignItems: "center",
+            padding: 20,
+          }}
         >
           <ActivityIndicator size="large" color="#10ac84" />
-          <Text style={{ marginTop: 20, color: "#333" }}>
+          <Text
+            style={{
+              marginTop: 20,
+              color: "#333",
+              fontSize: 16,
+              marginBottom: 15,
+            }}
+          >
             Processing images...
           </Text>
+
+          {/* Progress bar showing processing status */}
+          <View style={styles.progressBarContainer}>
+            <View
+              style={[
+                styles.progressBar,
+                { width: `${(processedCount / capturedImages.length) * 100}%` },
+              ]}
+            />
+          </View>
+
+          <Text style={{ marginTop: 10, color: "#666", marginBottom: 20 }}>
+            {processedCount} of {capturedImages.length} pages processed
+          </Text>
+
+          {/* <TouchableOpacity
+              style={styles.backgroundProcessButton}
+              onPress={handleMinimizeProcessing}
+            >
+              <Text style={styles.backgroundProcessText}>Minimize to corner</Text>
+            </TouchableOpacity> */}
         </View>
       )}
       {/* Show success message after processing */}
@@ -700,6 +864,15 @@ export default function ScanScreen() {
         onDocumentsPress={() => router.push("/home")}
         onProfilePress={() => router.push("/profile")}
       /> */}
+      {/* Floating bubble for minimized processing */}
+      {step === "processing" && isProcessingMinimized && (
+        <FloatingProcessBubble
+          visible={true}
+          processedCount={processedCount}
+          totalCount={capturedImages.length}
+          onPress={handleMaximizeProcessing}
+        />
+      )}
     </View>
   );
 }
@@ -881,5 +1054,31 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "bold",
+  },
+  // New styles for progress bar
+  progressBarContainer: {
+    width: "100%",
+    height: 10,
+    backgroundColor: "#eee",
+    borderRadius: 5,
+    overflow: "hidden",
+    marginTop: 20,
+  },
+  progressBar: {
+    height: "100%",
+    backgroundColor: "#10ac84",
+    borderRadius: 5,
+  },
+  backgroundProcessButton: {
+    marginTop: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 5,
+    backgroundColor: "#10ac84",
+  },
+  backgroundProcessText: {
+    color: "#fff",
+    fontSize: 16,
+    textAlign: "center",
   },
 });

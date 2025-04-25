@@ -1,26 +1,13 @@
-import { View, StyleSheet } from "react-native";
-import { useRouter, Redirect } from "expo-router";
-import Auth from "@/components/Auth";
+import { Redirect } from "expo-router";
 import { authStore } from "@/store/authStore";
 
 export default function Index() {
   const { user } = authStore();
-  const router = useRouter();
 
-  // Redirect to app if user is logged in
+  // Redirect based on auth state
   if (user) {
-    return <Redirect href="/(app)" />;
+    return <Redirect href="/(app)/home" />; // Redirect logged-in users to the home screen inside the app group
+  } else {
+    return <Redirect href="/auth" />; // Redirect logged-out users to the new auth screen
   }
-
-  return (
-    <View style={styles.container}>
-      <Auth />
-    </View>
-  );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-});

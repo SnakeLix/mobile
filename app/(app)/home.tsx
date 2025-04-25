@@ -9,18 +9,29 @@ import {
   Alert,
   TextInput,
   Image,
+  Modal,
+  ScrollView,
+  Dimensions,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { documentStore } from "@/store/documentStore";
 import { Document } from "@/types/document";
 import BottomNavigation from "@/components/BottomNavigation";
+import * as Clipboard from "expo-clipboard";
 
 export default function HomeScreen() {
   const router = useRouter();
   const { documents, loading, error, fetchDocuments, removeDocument } =
     documentStore();
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedDocument, setSelectedDocument] = useState<Document | null>(
+    null
+  );
+  const [showModal, setShowModal] = useState(false);
+  const [activeTab, setActiveTab] = useState<"images" | "document">("images");
+  const [imageIndex, setImageIndex] = useState(0);
+  const [textIndex, setTextIndex] = useState(0);
 
   useEffect(() => {
     // Refresh documents data when screen is focused
@@ -40,13 +51,12 @@ export default function HomeScreen() {
   };
 
   const handleDocumentPress = (document: Document) => {
-    // Set current document and navigate to detail view
     documentStore.setState({ currentDocument: document });
-    // In a full implementation, you would navigate to a document detail screen
-    Alert.alert(
-      "Document Details",
-      `Title: ${document.title}\nPages: ${document.data.pages.length}`
-    );
+    setSelectedDocument(document);
+    setShowModal(true);
+    setActiveTab("images");
+    setImageIndex(0);
+    setTextIndex(0);
   };
 
   const handleDeleteDocument = (document: Document) => {
@@ -133,6 +143,21 @@ export default function HomeScreen() {
     </View>
   );
 
+  // Copy all text from all pages
+  const handleCopyAllText = () => {
+    if (!selectedDocument) return;
+    const allText = selectedDocument.data.pages
+      .map((p, i) => `Page ${i + 1}:\n${p.text}`)
+      .join("\n\n");
+    Clipboard.setStringAsync(allText);
+  };
+  // Copy text from current page
+  const handleCopyText = () => {
+    if (!selectedDocument) return;
+    const page = selectedDocument.data.pages[textIndex];
+    if (page) Clipboard.setStringAsync(page.text);
+  };
+
   return (
     <View style={styles.container}>
       {/* Search Bar */}
@@ -193,6 +218,226 @@ export default function HomeScreen() {
         onDocumentsPress={handleDocumentsPress}
         onProfilePress={handleProfilePress}
       />
+
+      <Modal
+        visible={showModal}
+        animationType="slide"
+        onRequestClose={() => setShowModal(false)}
+        transparent={false}
+      >
+        <View style={{ flex: 1, backgroundColor: "#fff" }}>
+          {/* Header */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              padding: 16,
+              borderBottomWidth: 1,
+              borderColor: "#eee",
+              justifyContent: "space-between",
+            }}
+          >
+            <TouchableOpacity onPress={() => setShowModal(false)}>
+              <Ionicons name="arrow-back" size={28} color="#10ac84" />
+            </TouchableOpacity>
+            <Text style={{ fontWeight: "bold", fontSize: 18, color: "#222" }}>
+              {selectedDocument?.title || "Document"}
+            </Text>
+            <View style={{ width: 28 }} />
+          </View>
+          {/* Tabs */}
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "center",
+              marginTop: 10,
+              marginBottom: 10,
+            }}
+          >
+            <TouchableOpacity
+              style={{
+                paddingVertical: 8,
+                paddingHorizontal: 24,
+                borderBottomWidth: activeTab === "images" ? 2 : 0,
+                borderColor: "#10ac84",
+                marginRight: 20,
+              }}
+              onPress={() => setActiveTab("images")}
+            >
+              <Text
+                style={{
+                  color: activeTab === "images" ? "#10ac84" : "#666",
+                  fontWeight: "bold",
+                }}
+              >
+                Images
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{
+                paddingVertical: 8,
+                paddingHorizontal: 24,
+                borderBottomWidth: activeTab === "document" ? 2 : 0,
+                borderColor: "#10ac84",
+              }}
+              onPress={() => setActiveTab("document")}
+            >
+              <Text
+                style={{
+                  color: activeTab === "document" ? "#10ac84" : "#666",
+                  fontWeight: "bold",
+                }}
+              >
+                Document
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {/* Tab Content */}
+          {activeTab === "images" && selectedDocument && (
+            <View
+              style={{
+                flex: 1,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <ScrollView
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(e) => {
+                  const width = Dimensions.get("window").width;
+                  setImageIndex(
+                    Math.round(e.nativeEvent.contentOffset.x / width)
+                  );
+                }}
+                contentOffset={{
+                  x: imageIndex * Dimensions.get("window").width,
+                  y: 0,
+                }}
+                style={{ flexGrow: 0 }}
+              >
+                {selectedDocument.data.pages.map((page, idx) => (
+                  <View
+                    key={idx}
+                    style={{
+                      width: Dimensions.get("window").width,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: 20,
+                    }}
+                  >
+                    <Image
+                      source={{ uri: page.image_url }}
+                      style={{
+                        width: 300,
+                        height: 400,
+                        borderRadius: 10,
+                        backgroundColor: "#eee",
+                      }}
+                      resizeMode="contain"
+                    />
+                    <Text
+                      style={{
+                        marginTop: 10,
+                        color: "#333",
+                        fontWeight: "500",
+                      }}
+                    >
+                      Page {idx + 1}
+                    </Text>
+                  </View>
+                ))}
+              </ScrollView>
+              {/* Page indicator */}
+              <Text style={{ marginTop: 10, color: "#666" }}>
+                {imageIndex + 1} / {selectedDocument.data.pages.length}
+              </Text>
+            </View>
+          )}
+          {activeTab === "document" && selectedDocument && (
+            <View
+              style={{
+                flex: 1,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <ScrollView
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(e) => {
+                  const width = Dimensions.get("window").width;
+                  setTextIndex(
+                    Math.round(e.nativeEvent.contentOffset.x / width)
+                  );
+                }}
+                contentOffset={{
+                  x: textIndex * Dimensions.get("window").width,
+                  y: 0,
+                }}
+                style={{ flexGrow: 0 }}
+              >
+                {selectedDocument.data.pages.map((page, idx) => (
+                  <View
+                    key={idx}
+                    style={{
+                      width: Dimensions.get("window").width,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: 20,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 16,
+                        color: "#222",
+                        marginBottom: 20,
+                        textAlign: "left",
+                      }}
+                    >
+                      {page.text}
+                    </Text>
+                    <View style={{ flexDirection: "row", gap: 10 }}>
+                      <TouchableOpacity
+                        style={{
+                          backgroundColor: "#10ac84",
+                          paddingVertical: 10,
+                          paddingHorizontal: 18,
+                          borderRadius: 6,
+                          marginRight: 10,
+                        }}
+                        onPress={handleCopyText}
+                      >
+                        <Text style={{ color: "#fff", fontWeight: "bold" }}>
+                          Copy
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={{
+                          backgroundColor: "#222f3e",
+                          paddingVertical: 10,
+                          paddingHorizontal: 18,
+                          borderRadius: 6,
+                        }}
+                        onPress={handleCopyAllText}
+                      >
+                        <Text style={{ color: "#fff", fontWeight: "bold" }}>
+                          Copy All
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={{ marginTop: 10, color: "#666" }}>
+                      Page {idx + 1} / {selectedDocument.data.pages.length}
+                    </Text>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+        </View>
+      </Modal>
     </View>
   );
 }
