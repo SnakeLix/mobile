@@ -1,6 +1,7 @@
+// import { useTextDetector } from "@/hooks/useTextDetector";
+import { styles } from "./scan.style";
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
-  StyleSheet,
   View,
   Text,
   TouchableOpacity,
@@ -11,19 +12,52 @@ import {
   Image,
   Modal,
   AppState,
+  Dimensions,
 } from "react-native";
-import { CameraView, CameraType } from "expo-camera";
+import { CameraView } from "expo-camera";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { documentStore } from "@/store/documentStore";
-import { Document, Page } from "@/types/document";
+import { Page } from "@/types/document";
 import FloatingProcessBubble from "@/components/FloatingProcessBubble";
-import { createDocument, uploadDocumentImage } from "@/service/documentService";
+import { uploadDocumentImage } from "@/service/documentService";
+import { ocrFromFile, ocrFromBase64 } from "@/service/ocrService"; // <-- UPDATE THIS IMPORT
 import { useCamera } from "@/components/scan/hooks/useCamera";
 import CameraControls from "@/components/scan/ui/CameraControls";
+import * as Device from "expo-device";
+import * as FileSystem from "expo-file-system";
+import * as Clipboard from "expo-clipboard";
+
+async function getLocalPlaceholderImage(): Promise<string> {
+  const remoteUrl =
+    "https://www.dropbox.com/scl/fi/0q57enzpi9o8ic4g8hd6u/z6529927408925_2a6ef6e9d94e4a04e7bdfcd9262de3a6.jpg?rlkey=1gxi8jx0c201ydme55trwhjrs&st=387os9p0&dl=1";
+  const localUri =
+    FileSystem.cacheDirectory +
+    Math.random().toString(36).substring(2) +
+    ".jpg";
+  try {
+    const fileInfo = await FileSystem.getInfoAsync(localUri);
+    if (!fileInfo.exists) {
+      await FileSystem.downloadAsync(remoteUrl, localUri);
+    }
+    return localUri;
+  } catch (e) {
+    console.error("Failed to download placeholder image", e);
+    return remoteUrl; // fallback (will still fail for OCR)
+  }
+}
 
 export default function ScanScreen() {
   const router = useRouter();
+  const modelsReady = true;
+  const modelLoading = false;
+  const textDetect = async (a: any, b: any) => {};
+  // const {
+  //   isLoading: modelLoading,
+  //   modelsReady: modelsReady,
+  //   textDetect,
+  // } = useTextDetector();
+
   const { addDocument } = documentStore();
   const {
     permission,
@@ -34,6 +68,7 @@ export default function ScanScreen() {
     toggleCameraFacing,
     takePicture: captureImage,
   } = useCamera();
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [capturedImages, setCapturedImages] = useState<Page[]>([]);
   const [documentTitle, setDocumentTitle] = useState("");
@@ -48,6 +83,39 @@ export default function ScanScreen() {
   const [backgroundProcessingComplete, setBackgroundProcessingComplete] =
     useState(false);
   const [isProcessingMinimized, setIsProcessingMinimized] = useState(false);
+  const [activeTab, setActiveTab] = useState<"images" | "document">("images");
+  const [previewIndex, setPreviewIndex] = useState(0);
+
+  // Copy all text from all pages
+  const handleCopyAllText = async () => {
+    if (ocrPages.length === 0) return;
+    const allText = ocrPages
+      .map((p, i) => `Page ${i + 1}:\n${p.text}`)
+      .join("\n\n");
+
+    try {
+      await Clipboard.setStringAsync(allText);
+      Alert.alert("Copied", "All text copied to clipboard");
+    } catch (error) {
+      console.error("Failed to copy text", error);
+      Alert.alert("Error", "Failed to copy text to clipboard");
+    }
+  };
+
+  // Copy text from current page
+  const handleCopyText = async () => {
+    if (ocrPages.length === 0 || previewIndex >= ocrPages.length) return;
+    const pageText = ocrPages[previewIndex].text;
+
+    try {
+      await Clipboard.setStringAsync(pageText);
+      Alert.alert("Copied", "Text copied to clipboard");
+    } catch (error) {
+      console.error("Failed to copy text", error);
+      Alert.alert("Error", "Failed to copy text to clipboard");
+    }
+  };
+
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextAppState) => {
       if (processingInBackground && nextAppState === "active") {
@@ -60,22 +128,31 @@ export default function ScanScreen() {
       subscription.remove();
     };
   }, [processingInBackground, backgroundProcessingComplete, router]);
-  function handleMinimizeProcessing() {
-    setIsProcessingMinimized(true);
-  }
-  function handleMaximizeProcessing() {
-    setIsProcessingMinimized(false);
-  }
+
   const handleTakePicture = useCallback(async () => {
-    const newPage = await captureImage();
+    let newPage;
+    if (
+      Device.isDevice === false ||
+      Device.deviceType === Device.DeviceType.DESKTOP
+    ) {
+      const localUri = await getLocalPlaceholderImage();
+      newPage = {
+        image_url: localUri,
+        text: "",
+      };
+    } else {
+      newPage = await captureImage();
+    }
     if (newPage) {
       setCurrentImage(newPage);
       setStep("review");
     }
   }, [captureImage]);
+
   function handleEditImage() {
     Alert.alert("Edit", "Image editing not implemented yet.");
   }
+
   function handleNextImage() {
     if (currentImage) {
       setCapturedImages((prev) => [...prev, currentImage]);
@@ -83,6 +160,7 @@ export default function ScanScreen() {
       setStep("camera");
     }
   }
+
   function handleDoneCapture() {
     if (currentImage) {
       setCapturedImages((prev) => [...prev, currentImage]);
@@ -90,17 +168,40 @@ export default function ScanScreen() {
     }
     setStep("list");
   }
+
   function handleRemoveImage(index: number) {
-    router.replace("/");
     setCapturedImages(capturedImages.filter((_, i) => i !== index));
   }
-  async function mockOcrInference(
+
+  async function ocrInference(
     imageUri: string,
     index: number
-  ): Promise<string> {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    return `Mock OCR text for page ${index + 1} (image: ${imageUri})`;
+  ): Promise<{ text: string; boxes: any[] }> {
+    try {
+      console.log("Performing OCR on image:", imageUri);
+
+      // Read as base64 and send directly without trying to create a File/Blob
+      const base64 = await FileSystem.readAsStringAsync(imageUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      // Extract filename from URI for better identification on server
+      const filename = imageUri.split("/").pop() || `image_${index}.jpg`;
+
+      // Use the new base64 method instead of the file method
+      const result = await ocrFromBase64(base64, filename);
+
+      console.log("OCR result:", result);
+      return { text: result.final_text, boxes: result.boxes };
+    } catch (error) {
+      console.error(`OCR inference error for image ${index}:`, error);
+      return {
+        text: `Failed to extract text from page ${index + 1}`,
+        boxes: [],
+      };
+    }
   }
+
   async function handleProcess() {
     if (capturedImages.length === 0) {
       Alert.alert(
@@ -109,20 +210,34 @@ export default function ScanScreen() {
       );
       return;
     }
+
+    if (!modelsReady) {
+      Alert.alert(
+        "Models Not Ready",
+        "The OCR models are still loading. Please wait a moment and try again."
+      );
+      return;
+    }
+
     setStep("processing");
     setIsProcessing(true);
     setProcessedCount(0);
+
     try {
-      const processedPagesPromises = capturedImages.map(async (page, idx) => {
-        const text = await mockOcrInference(page.image_url, idx);
+      const processedPages: Page[] = [];
+      for (let idx = 0; idx < capturedImages.length; idx++) {
+        const page = capturedImages[idx];
+        // Upload image first
         const uploadedUrl = await uploadDocumentImage(page.image_url);
-        setProcessedCount((prev) => prev + 1);
-        return {
+        // OCR using the local file (not the uploaded URL)
+        const ocrResult = await ocrInference(page.image_url, idx);
+        processedPages.push({
           image_url: uploadedUrl,
-          text,
-        };
-      });
-      const processedPages = await Promise.all(processedPagesPromises);
+          text: ocrResult.text, // <-- Only assign the string
+          // Optionally, you can store ocrResult.boxes elsewhere if needed
+        });
+        setProcessedCount((prev) => prev + 1);
+      }
       setOcrPages(processedPages);
       setIsProcessing(false);
       setStep("title");
@@ -131,19 +246,24 @@ export default function ScanScreen() {
       setIsProcessing(false);
       Alert.alert(
         "Processing Error",
-        "Failed to process and save document. Please try again."
+        "Failed to process document. " +
+          (error instanceof Error ? error.message : "Please try again later.")
       );
       setStep("list");
     }
   }
+
+  // Show loading screen if camera permission is being checked
   if (!permission) {
     return (
       <View style={styles.permissionContainer}>
-        <ActivityIndicator size="large" />
+        <ActivityIndicator size="large" color="#10ac84" />
         <Text>Requesting Camera Permission...</Text>
       </View>
     );
   }
+
+  // Show permission request screen if camera permission is not granted
   if (!permission.granted) {
     return (
       <View style={styles.permissionContainer}>
@@ -159,23 +279,7 @@ export default function ScanScreen() {
       </View>
     );
   }
-  function handleSkipImage() {
-    Alert.alert(
-      "Skip Image",
-      "Do you want to skip this image? If yes, the image will be deleted from the list.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Yes, Skip",
-          style: "destructive",
-          onPress: () => {
-            setCurrentImage(null);
-            setStep(capturedImages.length > 0 ? "camera" : "camera");
-          },
-        },
-      ]
-    );
-  }
+
   function handleRetakeImage() {
     Alert.alert(
       "Retake Image",
@@ -193,6 +297,7 @@ export default function ScanScreen() {
       ]
     );
   }
+
   async function handleSaveDocument() {
     if (ocrPages.length === 0) {
       Alert.alert("Error", "No processed pages to save. Please try again.");
@@ -218,6 +323,7 @@ export default function ScanScreen() {
       Alert.alert("Save Error", "Failed to save document. Please try again.");
     }
   }
+
   const exitFlow = () => {
     setShowImagesModal(false);
     setCurrentImage(null);
@@ -227,16 +333,26 @@ export default function ScanScreen() {
     setStep("camera");
     router.replace("/home");
   };
+
   async function handleBackgroundProcess() {
+    if (!modelsReady) {
+      Alert.alert(
+        "Models Not Ready",
+        "The OCR models are still loading. Please wait a moment and try again."
+      );
+      return;
+    }
+
     setProcessingInBackground(true);
     setIsProcessing(true);
     setProcessedCount(0);
     router.replace("/home");
+
     try {
       const processedPages = [];
       for (let i = 0; i < capturedImages.length; i++) {
         const page = capturedImages[i];
-        const text = await mockOcrInference(page.image_url, i);
+        const text = await ocrInference(page.image_url, i);
         const uploadedUrl = await uploadDocumentImage(page.image_url);
         processedPages.push({ image_url: uploadedUrl, text });
         setProcessedCount((prev) => prev + 1);
@@ -252,8 +368,31 @@ export default function ScanScreen() {
       setProcessingInBackground(false);
     }
   }
+
+  // Show model loading overlay if models are not ready
+  if (modelLoading && !modelsReady && step === "camera") {
+    return (
+      <View style={styles.permissionContainer}>
+        <ActivityIndicator size="large" color="#10ac84" />
+        <Text style={styles.loadingText}>Loading OCR models...</Text>
+        <Text style={styles.loadingSubText}>This may take a few moments</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
+      {/* Models not ready warning for camera screen */}
+      {!modelsReady && step === "camera" && (
+        <View style={styles.modelWarningBanner}>
+          <Ionicons name="warning" size={20} color="#fff" />
+          <Text style={styles.modelWarningText}>
+            OCR models still loading. You can capture images, but processing
+            will be delayed.
+          </Text>
+        </View>
+      )}
+
       {step === "camera" && (
         <CameraView ref={cameraRef} style={styles.camera} facing={facing}>
           <CameraControls
@@ -264,6 +403,7 @@ export default function ScanScreen() {
           />
         </CameraView>
       )}
+
       {step === "review" && currentImage && (
         <View style={{ flex: 1, backgroundColor: "#fff" }}>
           <View
@@ -346,11 +486,12 @@ export default function ScanScreen() {
           <View
             style={{
               flexDirection: "row",
-              justifyContent: "space-around",
+              gap: 40,
+              justifyContent: "center",
               marginBottom: 32,
             }}
           >
-            <TouchableOpacity
+            {/* <TouchableOpacity
               style={[
                 styles.actionButton,
                 {
@@ -369,7 +510,7 @@ export default function ScanScreen() {
               <Text style={[styles.actionButtonText, { color: "#10ac84" }]}>
                 Edit
               </Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
             <TouchableOpacity
               style={[styles.actionButton, { backgroundColor: "#10ac84" }]}
               onPress={handleNextImage}
@@ -486,6 +627,16 @@ export default function ScanScreen() {
       </Modal>
       {step === "list" && (
         <View style={{ flex: 1, backgroundColor: "#fff", padding: 16 }}>
+          {/* Show model warning if needed */}
+          {!modelsReady && (
+            <View style={styles.modelWarningCard}>
+              <Ionicons name="warning" size={24} color="#f39c12" />
+              <Text style={styles.modelWarningCardText}>
+                OCR models are still loading. Processing will be available once
+                they're ready.
+              </Text>
+            </View>
+          )}
           <View style={styles.listHeader}>
             <TouchableOpacity
               style={{ padding: 5 }}
@@ -497,12 +648,12 @@ export default function ScanScreen() {
               Captured Images ({capturedImages.length})
             </Text>
           </View>
-          <TextInput
+          {/* <TextInput
             style={styles.titleInput}
             placeholder="Enter document title (optional)"
             value={documentTitle}
             onChangeText={setDocumentTitle}
-          />
+          /> */}
           <ScrollView>
             {capturedImages.length === 0 ? (
               <Text style={styles.emptyListText}>
@@ -533,14 +684,26 @@ export default function ScanScreen() {
               styles.actionButton,
               styles.saveButton,
               { marginTop: 20 },
-              (isProcessing || capturedImages.length === 0) &&
+              (!modelsReady || isProcessing || capturedImages.length === 0) &&
                 styles.disabledButton,
             ]}
             onPress={handleProcess}
-            disabled={isProcessing || capturedImages.length === 0}
+            disabled={
+              !modelsReady || isProcessing || capturedImages.length === 0
+            }
           >
             {isProcessing ? (
               <ActivityIndicator color="#fff" />
+            ) : !modelsReady ? (
+              <>
+                <Ionicons
+                  name="hourglass-outline"
+                  size={22}
+                  color="#fff"
+                  style={{ marginRight: 8 }}
+                />
+                <Text style={styles.actionButtonText}>Waiting for Models</Text>
+              </>
             ) : (
               <>
                 <Ionicons
@@ -621,25 +784,129 @@ export default function ScanScreen() {
               onChangeText={setDocumentTitle}
               autoFocus={true}
             />
-            <View style={styles.previewImagesContainer}>
-              <Text style={styles.previewLabel}>
-                {ocrPages.length} {ocrPages.length === 1 ? "page" : "pages"}{" "}
-                processed
-              </Text>
-              <ScrollView
-                horizontal={true}
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.previewScrollContainer}
+
+            {/* Tab navigation */}
+            <View style={styles.previewTabContainer}>
+              <TouchableOpacity
+                style={[
+                  styles.previewTab,
+                  activeTab === "images" && styles.activePreviewTab,
+                ]}
+                onPress={() => setActiveTab("images")}
               >
-                {ocrPages.map((page, idx) => (
-                  <Image
-                    key={idx}
-                    source={{ uri: page.image_url }}
-                    style={styles.previewThumbnail}
-                  />
-                ))}
-              </ScrollView>
+                <Text
+                  style={[
+                    styles.previewTabText,
+                    activeTab === "images" && styles.activePreviewTabText,
+                  ]}
+                >
+                  Images
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.previewTab,
+                  activeTab === "document" && styles.activePreviewTab,
+                ]}
+                onPress={() => setActiveTab("document")}
+              >
+                <Text
+                  style={[
+                    styles.previewTabText,
+                    activeTab === "document" && styles.activePreviewTabText,
+                  ]}
+                >
+                  Document
+                </Text>
+              </TouchableOpacity>
             </View>
+
+            {/* Preview content */}
+            <View style={styles.previewContent}>
+              {activeTab === "images" && (
+                <View style={styles.imagePreviewContainer}>
+                  <ScrollView
+                    horizontal
+                    pagingEnabled
+                    showsHorizontalScrollIndicator={false}
+                    onMomentumScrollEnd={(e) => {
+                      const width = Dimensions.get("window").width * 0.8;
+                      setPreviewIndex(
+                        Math.round(e.nativeEvent.contentOffset.x / width)
+                      );
+                    }}
+                    contentOffset={{
+                      x: previewIndex * Dimensions.get("window").width * 0.8,
+                      y: 0,
+                    }}
+                  >
+                    {ocrPages.map((page, idx) => (
+                      <View key={idx} style={styles.imagePreviewPage}>
+                        <Image
+                          source={{ uri: page.image_url }}
+                          style={styles.previewImage}
+                          resizeMode="contain"
+                        />
+                        <Text style={styles.pageIndicatorText}>
+                          Page {idx + 1}
+                        </Text>
+                      </View>
+                    ))}
+                  </ScrollView>
+                  <Text style={styles.paginationText}>
+                    {previewIndex + 1} / {ocrPages.length}
+                  </Text>
+                </View>
+              )}
+
+              {activeTab === "document" && (
+                <View style={styles.textPreviewContainer}>
+                  <ScrollView
+                    horizontal
+                    pagingEnabled
+                    showsHorizontalScrollIndicator={false}
+                    onMomentumScrollEnd={(e) => {
+                      const width = Dimensions.get("window").width * 0.8;
+                      setPreviewIndex(
+                        Math.round(e.nativeEvent.contentOffset.x / width)
+                      );
+                    }}
+                    contentOffset={{
+                      x: previewIndex * Dimensions.get("window").width * 0.8,
+                      y: 0,
+                    }}
+                  >
+                    {ocrPages.map((page, idx) => (
+                      <View key={idx} style={styles.textPreviewPage}>
+                        <ScrollView style={styles.textScrollView}>
+                          <Text style={styles.previewText}>{page.text}</Text>
+                        </ScrollView>
+                        <Text style={styles.pageIndicatorText}>
+                          Page {idx + 1} / {ocrPages.length}
+                        </Text>
+                      </View>
+                    ))}
+                  </ScrollView>
+
+                  <View style={styles.textActionsContainer}>
+                    <TouchableOpacity
+                      style={styles.copyButton}
+                      onPress={handleCopyText}
+                    >
+                      <Text style={styles.copyButtonText}>Copy</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.copyAllButton}
+                      onPress={handleCopyAllText}
+                    >
+                      <Text style={styles.copyButtonText}>Copy All</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+            </View>
+
             <TouchableOpacity
               style={[
                 styles.saveDocumentButton,
@@ -663,313 +930,3 @@ export default function ScanScreen() {
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
-  permissionContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 20,
-  },
-  permissionText: {
-    fontSize: 16,
-    color: "#333",
-    textAlign: "center",
-    marginBottom: 20,
-    paddingHorizontal: 20,
-  },
-  permissionButton: {
-    backgroundColor: "#10ac84",
-    paddingVertical: 12,
-    paddingHorizontal: 30,
-    borderRadius: 8,
-  },
-  permissionButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  camera: { flex: 1 },
-  modalHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: 16,
-    borderBottomWidth: 1,
-    borderColor: "#eee",
-    paddingTop: 40,
-  },
-  modalTitle: {
-    fontWeight: "bold",
-    fontSize: 18,
-    color: "#222",
-  },
-  modalScrollContent: {
-    padding: 20,
-    paddingBottom: 100,
-  },
-  modalImageContainer: {
-    marginBottom: 24,
-    alignItems: "center",
-    position: "relative",
-  },
-  modalImage: {
-    width: 220,
-    height: 300,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "#ccc",
-  },
-  modalRemoveButton: {
-    position: "absolute",
-    top: 5,
-    right: 5,
-    backgroundColor: "rgba(255, 255, 255, 0.7)",
-    borderRadius: 15,
-    padding: 2,
-  },
-  modalImageLabel: {
-    marginTop: 8,
-    color: "#333",
-    fontWeight: "500",
-  },
-  modalFooter: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 16,
-    backgroundColor: "#fff",
-    borderTopWidth: 1,
-    borderColor: "#eee",
-    flexDirection: "row",
-    gap: 12,
-  },
-  modalButton: {
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: "center",
-    flex: 1,
-  },
-  modalButtonText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 16,
-  },
-  listHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 15,
-    paddingTop: 10,
-  },
-  listTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#333",
-    marginLeft: 15,
-  },
-  titleInput: {
-    fontSize: 16,
-    color: "#333",
-    marginBottom: 15,
-    borderBottomWidth: 1,
-    borderColor: "#ccc",
-    paddingVertical: 8,
-    paddingHorizontal: 5,
-  },
-  emptyListText: {
-    textAlign: "center",
-    marginTop: 50,
-    fontSize: 16,
-    color: "#888",
-  },
-  listItemContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-    backgroundColor: "#f9f9f9",
-    padding: 8,
-    borderRadius: 8,
-  },
-  listItemImage: {
-    width: 60,
-    height: 85,
-    borderRadius: 6,
-    marginRight: 12,
-  },
-  listItemLabel: {
-    flex: 1,
-    fontSize: 15,
-    color: "#444",
-  },
-  listItemRemove: {
-    padding: 5,
-  },
-  processingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 20,
-    backgroundColor: "rgba(255, 255, 255, 0.9)",
-  },
-  processingText: {
-    marginTop: 20,
-    color: "#333",
-    fontSize: 16,
-    marginBottom: 15,
-  },
-  progressBarContainer: {
-    width: "80%",
-    height: 10,
-    backgroundColor: "#eee",
-    borderRadius: 5,
-    overflow: "hidden",
-  },
-  progressBar: {
-    height: "100%",
-    backgroundColor: "#10ac84",
-    borderRadius: 5,
-  },
-  progressText: {
-    marginTop: 10,
-    color: "#666",
-    marginBottom: 20,
-  },
-  successContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 20,
-  },
-  successTitle: {
-    fontSize: 22,
-    fontWeight: "bold",
-    color: "#10ac84",
-    marginBottom: 10,
-    textAlign: "center",
-  },
-  successSubtitle: {
-    fontSize: 16,
-    color: "#333",
-    marginBottom: 30,
-    textAlign: "center",
-    paddingHorizontal: 20,
-  },
-  successButton: {
-    backgroundColor: "#10ac84",
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  successButtonText: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 16,
-  },
-  titleScreenContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#f9f9f9",
-  },
-  titleCard: {
-    width: "90%",
-    backgroundColor: "#fff",
-    borderRadius: 10,
-    padding: 20,
-    elevation: 3,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1,
-  },
-  titleIcon: {
-    alignSelf: "center",
-    marginBottom: 15,
-  },
-  titleScreenHeading: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#333",
-    textAlign: "center",
-    marginBottom: 5,
-  },
-  titleScreenSubheading: {
-    fontSize: 14,
-    color: "#666",
-    textAlign: "center",
-    marginBottom: 20,
-  },
-  titleScreenInput: {
-    height: 50,
-    borderColor: "#ccc",
-    borderWidth: 1,
-    borderRadius: 5,
-    paddingHorizontal: 10,
-    fontSize: 16,
-    marginBottom: 20,
-  },
-  previewImagesContainer: {
-    marginBottom: 20,
-  },
-  previewLabel: {
-    fontSize: 14,
-    color: "#333",
-    marginBottom: 5,
-  },
-  previewScrollContainer: {
-    paddingVertical: 10,
-  },
-  previewThumbnail: {
-    width: 100,
-    height: 140,
-    borderRadius: 5,
-    marginRight: 10,
-  },
-  saveDocumentButton: {
-    backgroundColor: "#10ac84",
-    paddingVertical: 12,
-    borderRadius: 5,
-    alignItems: "center",
-  },
-  saveDocumentButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
-  actionButton: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 18,
-    borderRadius: 25,
-    minWidth: 100,
-  },
-  actionButtonText: {
-    color: "#fff",
-    fontWeight: "600",
-    marginLeft: 8,
-    fontSize: 15,
-  },
-  saveButton: {
-    backgroundColor: "#10ac84",
-  },
-  disabledButton: {
-    backgroundColor: "#a0a0a0",
-    opacity: 0.7,
-  },
-  backgroundProcessButton: {
-    marginTop: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 5,
-    backgroundColor: "#10ac84",
-  },
-  backgroundProcessText: {
-    color: "#fff",
-    fontSize: 16,
-    textAlign: "center",
-  },
-});

@@ -3,8 +3,7 @@ import { authStore } from "@/store/authStore";
 import axios from "axios";
 
 const axiosInstance = axios.create({
-  baseURL:
-    process.env.EXPO_PUBLIC_API_ENDPOINT || "http://localhost:8000/api/v1",
+  baseURL: "https://4533-103-130-211-150.ngrok-free.app/api/v1",
   timeout: 10000,
 });
 

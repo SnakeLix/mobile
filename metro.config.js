@@ -1,10 +1,5 @@
-const { getDefaultConfig } = require("expo/metro-config");
-const { withNativeWind } = require("nativewind/metro");
-
+// metro.config.js
+const { getDefaultConfig } = require('expo/metro-config');
 const config = getDefaultConfig(__dirname);
-
-// Add .tflite to asset extensions
-config.resolver.assetExts.push("tflite");
-
-// Export config with NativeWind
-module.exports = withNativeWind(config, { input: "./global.css" });
+config.resolver.assetExts.push('tflite');
+module.exports = config;

@@ -12,7 +12,7 @@ export const login = async (request: LoginRequest): Promise<Token> => {
     const response = await axios.post("/token", request);
     return response.data;
   } catch (error) {
-    console.error("Login error:", error);
+    console.error("Login error:", JSON.stringify(error, null, 2));
     throw error; // Rethrow the error to handle it in the calling function
   }
 };
