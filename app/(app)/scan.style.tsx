@@ -8,6 +8,13 @@ export const styles = StyleSheet.create({
     alignItems: "center",
     padding: 20,
   },
+  detectionText: {
+    fontSize: 16,
+    color: "#333",
+    textAlign: "center",
+    marginBottom: 20,
+    paddingHorizontal: 20,
+  },
   permissionText: {
     fontSize: 16,
     color: "#333",

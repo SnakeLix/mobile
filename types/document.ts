@@ -4,6 +4,10 @@ import { UUID } from "crypto";
 export interface Page {
   image_url: string;
   text: string;
+  detection: {
+    label: string;
+    confidence: number;
+  };
 }
 
 export interface DocumentBase {
@@ -11,7 +15,7 @@ export interface DocumentBase {
   data: { pages: Page[] };
 }
 
-export interface DocumentCreate extends DocumentBase {}
+export interface DocumentCreate extends DocumentBase { }
 
 export interface DocumentUpdate {
   title?: string;
@@ -25,4 +29,4 @@ export interface DocumentInDB extends DocumentBase {
   updated_at: Date;
 }
 
-export interface Document extends DocumentInDB {}
+export interface Document extends DocumentInDB { }

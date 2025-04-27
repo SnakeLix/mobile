@@ -1,4 +1,5 @@
 // import { useTextDetector } from "@/hooks/useTextDetector";
+import { useObjectDetection } from "@/hooks/useObjectDetection";
 import { styles } from "./scan.style";
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
@@ -47,11 +48,48 @@ async function getLocalPlaceholderImage(): Promise<string> {
   }
 }
 
+// Define ModelLoadingOverlay outside of the main component with proper TypeScript typing
+const ModelLoadingOverlay = ({ isLoading }: { isLoading: boolean }) => {
+  if (!isLoading) return null;
+
+  return (
+    <View style={{
+      position: 'absolute',
+      bottom: 20,
+      right: 20,
+      backgroundColor: 'white',
+      borderRadius: 10,
+      padding: 10,
+      flexDirection: 'row',
+      alignItems: 'center',
+      maxWidth: 250,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.25,
+      shadowRadius: 3.84,
+      elevation: 5,
+      zIndex: 9999
+    }}>
+      <ActivityIndicator size="small" color="#10ac84" style={{ marginRight: 10 }} />
+      <View style={{ flex: 1 }}>
+        <Text style={{
+          fontSize: 12,
+          fontWeight: 'bold'
+        }}>Loading Object Detection</Text>
+        <Text style={{
+          fontSize: 10,
+          color: '#555'
+        }}>Continue using the app normally</Text>
+      </View>
+    </View>
+  );
+};
+
 export default function ScanScreen() {
   const router = useRouter();
   const modelsReady = true;
   const modelLoading = false;
-  const textDetect = async (a: any, b: any) => {};
+  const textDetect = async (a: any, b: any) => { };
   // const {
   //   isLoading: modelLoading,
   //   modelsReady: modelsReady,
@@ -116,6 +154,10 @@ export default function ScanScreen() {
     }
   };
 
+  // Move the model loading alert to the top of the component with other hooks
+  const { runModelOnImage, isLoadingModel, modelLoaded, modelError } = useObjectDetection();
+
+  // All useEffects grouped together
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextAppState) => {
       if (processingInBackground && nextAppState === "active") {
@@ -129,6 +171,16 @@ export default function ScanScreen() {
     };
   }, [processingInBackground, backgroundProcessingComplete, router]);
 
+  useEffect(() => {
+    if (isLoadingModel) {
+      Alert.alert(
+        "Object Detection Model Loading",
+        "The object detection model is being loaded. This happens only once when you first use the app.",
+        [{ text: "OK" }]
+      );
+    }
+  }, [isLoadingModel]);
+
   const handleTakePicture = useCallback(async () => {
     let newPage;
     if (
@@ -139,6 +191,10 @@ export default function ScanScreen() {
       newPage = {
         image_url: localUri,
         text: "",
+        detection: {
+          label: "Unknown",
+          confidence: 0
+        }
       };
     } else {
       newPage = await captureImage();
@@ -176,7 +232,7 @@ export default function ScanScreen() {
   async function ocrInference(
     imageUri: string,
     index: number
-  ): Promise<{ text: string; boxes: any[] }> {
+  ): Promise<{ text: string; boxes: any[]; detection: { label: string; confidence: number } }> {
     try {
       console.log("Performing OCR on image:", imageUri);
 
@@ -190,14 +246,17 @@ export default function ScanScreen() {
 
       // Use the new base64 method instead of the file method
       const result = await ocrFromBase64(base64, filename);
-
-      console.log("OCR result:", result);
-      return { text: result.final_text, boxes: result.boxes };
+      let detection: any = await runModelOnImage(base64);
+      return { text: result.final_text, boxes: result.boxes, detection: detection };
     } catch (error) {
       console.error(`OCR inference error for image ${index}:`, error);
       return {
         text: `Failed to extract text from page ${index + 1}`,
         boxes: [],
+        detection: {
+          label: "Unknown",
+          confidence: 0
+        }
       };
     }
   }
@@ -233,7 +292,9 @@ export default function ScanScreen() {
         const ocrResult = await ocrInference(page.image_url, idx);
         processedPages.push({
           image_url: uploadedUrl,
-          text: ocrResult.text, // <-- Only assign the string
+          text: ocrResult.text,
+          detection: ocrResult.detection,
+          // <-- Only assign the string
           // Optionally, you can store ocrResult.boxes elsewhere if needed
         });
         setProcessedCount((prev) => prev + 1);
@@ -247,7 +308,7 @@ export default function ScanScreen() {
       Alert.alert(
         "Processing Error",
         "Failed to process document. " +
-          (error instanceof Error ? error.message : "Please try again later.")
+        (error instanceof Error ? error.message : "Please try again later.")
       );
       setStep("list");
     }
@@ -349,12 +410,18 @@ export default function ScanScreen() {
     router.replace("/home");
 
     try {
-      const processedPages = [];
+      const processedPages: Page[] = [];
       for (let i = 0; i < capturedImages.length; i++) {
         const page = capturedImages[i];
-        const text = await ocrInference(page.image_url, i);
+        const ocrResult = await ocrInference(page.image_url, i);
         const uploadedUrl = await uploadDocumentImage(page.image_url);
-        processedPages.push({ image_url: uploadedUrl, text });
+
+        // Extract just the text string from ocrResult
+        processedPages.push({
+          image_url: uploadedUrl,
+          text: ocrResult.text,
+          detection: ocrResult.detection
+        });
         setProcessedCount((prev) => prev + 1);
       }
       setOcrPages(processedPages);
@@ -423,19 +490,7 @@ export default function ScanScreen() {
                 borderRadius: 20,
               }}
               onPress={() => {
-                Alert.alert(
-                  "Discard Image",
-                  "Are you sure you want to discard this image?",
-                  [
-                    { text: "Cancel", style: "cancel" },
-                    {
-                      text: "Discard",
-                      onPress: () => {
-                        exitFlow();
-                      },
-                    },
-                  ]
-                );
+                exitFlow();
               }}
             >
               <Ionicons name="close" size={28} color="#e74c3c" />
@@ -457,9 +512,8 @@ export default function ScanScreen() {
                   marginLeft: 6,
                   fontSize: 15,
                 }}
-              >{`Show (${
-                capturedImages.length + (currentImage ? 1 : 0)
-              }) images`}</Text>
+              >{`Show (${capturedImages.length + (currentImage ? 1 : 0)
+                }) images`}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={{
@@ -685,7 +739,7 @@ export default function ScanScreen() {
               styles.saveButton,
               { marginTop: 20 },
               (!modelsReady || isProcessing || capturedImages.length === 0) &&
-                styles.disabledButton,
+              styles.disabledButton,
             ]}
             onPress={handleProcess}
             disabled={
@@ -727,11 +781,10 @@ export default function ScanScreen() {
               style={[
                 styles.progressBar,
                 {
-                  width: `${
-                    capturedImages.length > 0
-                      ? (processedCount / capturedImages.length) * 100
-                      : 0
-                  }%`,
+                  width: `${capturedImages.length > 0
+                    ? (processedCount / capturedImages.length) * 100
+                    : 0
+                    }%`,
                 },
               ]}
             />
@@ -878,7 +931,15 @@ export default function ScanScreen() {
                   >
                     {ocrPages.map((page, idx) => (
                       <View key={idx} style={styles.textPreviewPage}>
-                        <ScrollView style={styles.textScrollView}>
+                        <Text style={styles.detectionText}>
+                          {page?.detection?.label ? `Detected: ${page.detection.label} (${Math.round(page.detection.confidence * 100)}%)` : ''}
+                        </Text>
+                        {/* Make the ScrollView take most of the available height */}
+                        <ScrollView
+                          style={[styles.textScrollView, { maxHeight: Dimensions.get('window').height * 0.5 }]}
+                          nestedScrollEnabled={true}
+                          showsVerticalScrollIndicator={true}
+                        >
                           <Text style={styles.previewText}>{page.text}</Text>
                         </ScrollView>
                         <Text style={styles.pageIndicatorText}>
@@ -927,6 +988,7 @@ export default function ScanScreen() {
       {step === "processing" && isProcessingMinimized && (
         <FloatingProcessBubble />
       )}
+      <ModelLoadingOverlay isLoading={isLoadingModel} />
     </View>
   );
 }
